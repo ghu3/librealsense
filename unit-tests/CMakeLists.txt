@@ -76,6 +76,11 @@ if(BUILD_UNIT_TESTS)
     endif()
 
     include(./unit-tests.cmake)
+    if(TARGET test-types-advanced-depth-units)
+        target_include_directories(test-types-advanced-depth-units PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src ${CMAKE_CURRENT_SOURCE_DIR}/../src/core)
+    endif()
+
 endif()
 
 
