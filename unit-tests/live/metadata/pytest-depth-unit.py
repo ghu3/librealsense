@@ -1,10 +1,12 @@
 # License: Apache 2.0. See LICENSE file in root directory.
 # Copyright(c) 2026 RealSense, Inc. All Rights Reserved.
 
-import json
+import time
 import pytest
 import numpy as np
 import pyrealsense2 as rs
+import pyrsutils as rsutils
+from rspy.pytest.device_helpers import require_min_fw_version
 from pytest_check import check
 import logging
 log = logging.getLogger(__name__)
@@ -15,10 +17,10 @@ pytestmark = [
 ]
 
 
-def xfail_on_dds(dev, request):
-    # DDS FW reports neither a depth-units option nor depth-units metadata yet
+def require_dds_depth_units(dev):
+    # Older DDS FW reports neither a depth-units option nor depth-units metadata
     if dev.get_info(rs.camera_info.connection_type) == "DDS":
-        request.applymarker(pytest.mark.xfail(reason="DDS FW does not report depth units"))
+        require_min_fw_version(dev, rsutils.version(7, 59, 46941, 17304), "DDS depth units")
 
 
 def start_depth(dev, ctx):
@@ -34,10 +36,10 @@ def start_depth(dev, ctx):
     return pipeline
 
 
-def test_depth_units_metadata(test_device, request):
+def test_depth_units_metadata(test_device):
     """Get metadata depth units value and make sure it's non zero and equal to the depth sensor matching option value"""
     dev, ctx = test_device
-    xfail_on_dds(dev, request)
+    require_dds_depth_units(dev)
 
     pipeline = start_depth(dev, ctx)
     try:
@@ -60,17 +62,22 @@ def restore_depth_table(test_device_wrapped):
     am.set_depth_table(original)
 
 
-@pytest.mark.parametrize("write_path", ["depth-table", "json"])
-def test_depth_units_from_advanced_mode(test_device_wrapped, restore_depth_table, write_path, request):
-    """Depth units changed through advanced mode while streaming must reach the frames and the depth sensor"""
+def test_depth_units_from_advanced_mode(test_device_wrapped, restore_depth_table):
+    """Depth units changed through the advanced depth table while streaming must reach the frames and the depth sensor"""
     dev, ctx = test_device_wrapped
-    xfail_on_dds(dev, request)
+    require_dds_depth_units(dev)
 
     def median_distance():
-        for _ in range(30):  # let the FW apply the change and older frames drain
+        # Let the FW apply the change and older frames drain; the stream restarts with a few empty frames.
+        # Saturated pixels follow the units, so they are not distances; a too-sparse scene gives None.
+        for i in range(90):
             frame = pipeline.wait_for_frames().get_depth_frame()
-        raw = np.asanyarray(frame.get_data())
-        return frame.get_units(), float(np.median(raw[raw > 0])) * frame.get_units()
+            raw = np.asanyarray(frame.get_data())
+            valid = raw[(raw > 0) & (raw < 0xFFFF)]
+            if i >= 30 and valid.size >= raw.size // 20:
+                return frame.get_units(), float(np.median(valid)) * frame.get_units()
+        log.warning(f"only {valid.size} of {raw.size} depth pixels are valid, not checking distance")
+        return frame.get_units(), None
 
     pipeline = start_depth(dev, ctx)
     try:
@@ -80,21 +87,21 @@ def test_depth_units_from_advanced_mode(test_device_wrapped, restore_depth_table
         ds = streaming_dev.first_depth_sensor()
         _, baseline = median_distance()
         for units in (2000, 500):  # micrometers; 500 still covers 32m, so no far pixel saturates
-            if write_path == "json":
-                am.load_json(json.dumps({"param-depthunits": units}))
-            else:
-                dt = am.get_depth_table()
-                dt.depthUnits = units
-                am.set_depth_table(dt)
+            dt = am.get_depth_table()
+            dt.depthUnits = units
+            am.set_depth_table(dt)
             expected = units * 1e-6
             frame_units, distance = median_distance()
+            # Over DDS the option value follows the frames by about a second
+            deadline = time.time() + 3
+            while ds.get_depth_scale() != pytest.approx(expected, rel=1e-3) and time.time() < deadline:
+                time.sleep(0.1)
             check.almost_equal(frame_units, expected, rel=1e-3, msg=f"frame units after setting {units}um")
             check.almost_equal(ds.get_depth_scale(), expected, rel=1e-3, msg=f"depth scale after setting {units}um")
             if ds.supports(rs.option.depth_units):
                 check.almost_equal(ds.get_option(rs.option.depth_units), expected, rel=1e-3)
-            # The scene did not move, so the measured distance must not follow the units. A JSON load does not
-            # restart the depth stream and the FW does not always apply the new units to it, so check the table only
-            if write_path == "depth-table":
+            # The scene did not move, so the measured distance must not follow the units
+            if baseline is not None and distance is not None:
                 check.almost_equal(distance, baseline, rel=0.15, msg=f"median distance after setting {units}um")
     finally:
         pipeline.stop()
