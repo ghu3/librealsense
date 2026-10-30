@@ -46,7 +46,7 @@ namespace librealsense
         {fourcc('N','V','1','2'), RS2_STREAM_COLOR}
     };
 
-    d500_color::d500_color( std::shared_ptr< const d500_info > const & dev_info, rs2_format native_format )
+    d500_color::d500_color( std::shared_ptr< const d500_info > const & dev_info, rs2_format native_format, int color_mi )
         : d500_device( dev_info )
         , device( dev_info )
         , _color_stream( new stream( RS2_STREAM_COLOR ) )
@@ -55,7 +55,7 @@ namespace librealsense
     {
         try
         {
-            create_color_device( dev_info->get_context(), dev_info->get_group() );
+            create_color_device( dev_info->get_context(), dev_info->get_group(), color_mi );
             init();
         }
         catch (const std::exception& e)
@@ -66,7 +66,7 @@ namespace librealsense
         }
     }
 
-    void d500_color::create_color_device(std::shared_ptr<context> ctx, const platform::backend_device_group& group)
+    void d500_color::create_color_device(std::shared_ptr<context> ctx, const platform::backend_device_group& group, int color_mi)
     {
         using namespace ds;
 
@@ -107,7 +107,7 @@ namespace librealsense
                 color_devs_info = { mi0_infos[1] };
         }
         else
-            color_devs_info = filter_by_mi( group.uvc_devices, 3 );
+            color_devs_info = filter_by_mi( group.uvc_devices, color_mi );
 
         if ( color_devs_info.empty() )
         {

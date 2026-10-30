@@ -218,6 +218,53 @@ namespace librealsense
     };
 
 
+    // Extended 2C USB POC: Color 1/2 share the stereo imagers; Color 0 is
+    // the independent dedicated RGB function at MI 14 (EP5).
+    class rs5x5_concurrent_color_device : public rs5x5_device, public d500_color
+    {
+    public:
+        explicit rs5x5_concurrent_color_device( std::shared_ptr< const d500_info > const & dev_info )
+            : device( dev_info )
+            , backend_device( dev_info )
+            , d500_device( dev_info )
+            , rs5x5_device( dev_info )
+            , d500_color( dev_info, RS2_FORMAT_NV12, 14 )
+        {
+        }
+
+        std::shared_ptr< matcher > create_matcher( const frame_holder & frame ) const override
+        {
+            std::vector< std::shared_ptr< stream_interface > > streams = {
+                _depth_stream, _left_ir_stream, _right_ir_stream,
+                _color_stream_1, _color_stream_2, _color_stream, _object_detection_stream };
+            d500_depth_mapping::add_streams_if_active( streams );
+            add_motion_streams( _ds_motion_common, streams );
+            return create_default_matcher( streams );
+        }
+
+        bool contradicts( const stream_profile_interface * a,
+                          const std::vector< stream_profile > & others ) const override
+        {
+            // Only the stereo function shares FPS and dual-color resolution.
+            bool const dedicated = a->get_stream_type() == RS2_STREAM_COLOR && a->get_stream_index() == 0;
+            std::vector< stream_profile > same_function;
+            for( auto & sp : others )
+                if( ( sp.stream == RS2_STREAM_COLOR && sp.index == 0 ) == dedicated )
+                    same_function.push_back( sp );
+            return dedicated ? device::contradicts( a, same_function )
+                             : rs5x5_device::contradicts( a, same_function );
+        }
+
+        std::vector< tagged_profile > get_profiles_tags() const override
+        {
+            auto tags = rs5x5_device::get_profiles_tags();
+            tags.push_back( { RS2_STREAM_COLOR, 0, 1280, 720, RS2_FORMAT_RGB8, 30,
+                              profile_tag::PROFILE_TAG_SUPERSET } );
+            return tags;
+        }
+    };
+
+
     // D585 or D535 with dedicated color sensor. Can be with IR filter on lens or without.
     class rs5x5_dedicated_color_device
         : public d500_active
@@ -513,7 +560,15 @@ namespace librealsense
         try
         {
             if( ds::is_dual_rgb_pid( pid ) )
+            {
+                // The POC retains PID 0x0C07 and replaces MI 11 Mapping with
+                // placeholders, then appends dedicated RGB at MI 14. Ordinary
+                // 2C firmware (including USB2 fallback) keeps its original class.
+                if( pid == ds::D585_2C_PROTO_PID && mi_present( _group.uvc_devices, 14 )
+                    && ! mi_present( _group.uvc_devices, 11 ) )
+                    return std::make_shared< rs5x5_concurrent_color_device >( dev_info );
                 return std::make_shared< rs5x5_device >( dev_info );
+            }
 
             switch( pid )
             {

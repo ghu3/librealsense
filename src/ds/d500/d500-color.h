@@ -18,7 +18,7 @@ namespace librealsense
     class d500_color : public virtual d500_device
     {
     public:
-        d500_color( std::shared_ptr< const d500_info > const &, rs2_format native_format );
+        d500_color( std::shared_ptr< const d500_info > const &, rs2_format native_format, int color_mi = 3 );
 
         synthetic_sensor& get_color_sensor()
         {
@@ -46,7 +46,7 @@ namespace librealsense
         void register_stream_to_extrinsic_group(const stream_interface& stream, uint32_t group_index);
 
         void create_color_device(std::shared_ptr<context> ctx,
-            const platform::backend_device_group& group);
+            const platform::backend_device_group& group, int color_mi);
         void init();
 
         friend class d500_color_sensor;
